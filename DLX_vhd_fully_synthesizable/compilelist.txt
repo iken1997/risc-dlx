@@ -1,0 +1,11 @@
+0-packages/*.vhd
+a.b-DataPath.core/a.b.a-Alu.core/a.b.a.a-p4_adder.core/a.b.a.a.b-SUM_GENERATOR.core/a.b.a.a.b.a-carrySelectBlock.core/*.vhd
+a.b-DataPath.core/a.b.a-Alu.core/a.b.a.a-p4_adder.core/a.b.a.a.a-CARRY_GENERATOR.core/*.vhd
+a.b-DataPath.core/a.b.a-Alu.core/a.b.a.a-p4_adder.core/a.b.a.a.b-SUM_GENERATOR.core/*.vhd
+a.b-DataPath.core/a.b.a-Alu.core/a.b.a.a-p4_adder.core/*.vhd
+a.b-DataPath.core/a.b.a-Alu.core/*.vhd
+a.b-DataPath.core/*.vhd
+a.a-CU.vhd
+a.b-Datapath.vhd
+a-DLX.vhd
+test_bench_and_memory/*.vhd
