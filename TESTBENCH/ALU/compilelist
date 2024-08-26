@@ -1,0 +1,18 @@
+constants.vhd
+myTypes.vhd
+alu_type.vhd
+./SHIFTER/shifter.vhd
+"./LOGIC UNIT/LOGIC_UNIT.vhd"
+./ADDER/fa.vhd
+./ADDER/rca.vhd
+./ADDER/g_block.vhd
+./ADDER/pg_block.vhd
+./ADDER/pg_network.vhd
+./ADDER/CARRY_GENERATOR.vhd
+./ADDER/MUX21.vhd
+./ADDER/MUX21_GENERIC.vhd
+./ADDER/CarrySelectBlock.vhd
+./ADDER/SUM_GENERATOR.vhd
+./ADDER/p4_adder.vhd
+./ALU.vhd
+./tb_alu.vhd

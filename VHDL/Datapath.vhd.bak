@@ -1,0 +1,591 @@
+LIBRARY ieee;
+USE ieee.std_logic_1164.ALL;
+USE ieee.numeric_std.ALL;
+
+USE WORK.CONSTANTS.ALL;
+USE WORK.myTypes.ALL;
+USE WORK.alu_types.ALL;
+
+-----------------------------------------------------------------------------------------------------------
+
+ENTITY datapath IS
+    GENERIC (
+        Nbit : INTEGER := 32
+    );
+    PORT (
+        --Data signals
+        IRAM_ADDR : OUT WORD;
+        IRAM_IN : IN WORD;
+        DRAM_ADDR : OUT WORD;
+        DRAM_IN : IN WORD;
+        DRAM_OUT : OUT WORD;
+        --Control signals
+        IRAM_EN : OUT STD_LOGIC;
+        IRAM_READY : OUT STD_LOGIC;
+        DRAM_EN : OUT STD_LOGIC;
+        DRAM_READY : OUT STD_LOGIC;
+        DRAM_EN_R : OUT STD_LOGIC;
+        DRAM_EN_W : OUT STD_LOGIC;
+
+        --instr signals 
+        IR_OUT : OUT STD_LOGIC_VECTOR (IR_SIZE - 1 DOWNTO 0);
+
+        --Control Word signals
+         -- IF Control Signal
+        PC_LATCH_EN : IN STD_LOGIC;
+        IR_LATCH_EN : IN STD_LOGIC; -- Instruction Register Latch Enable
+        NPC_LATCH_EN : IN STD_LOGIC; -- NextProgramCounter Register Latch Enable
+        EN_STAGE1 : IN STD_LOGIC;
+        RST_STAGE1 : IN STD_LOGIC;
+
+        -- ID Control Signals
+        EN_STAGE2 : IN STD_LOGIC; -- Register A Latch Enable
+        RST_STAGE2 : IN STD_LOGIC;
+        RD1 : IN STD_LOGIC;
+        RD2 : IN STD_LOGIC;
+        SEL_M_I : IN STD_LOGIC_VECTOR (1 DOWNTO 0);
+
+        -- EX Control Signals
+        EN_STAGE3 : IN STD_LOGIC;
+        RST_STAGE3 : IN STD_LOGIC;
+        M1_SEL : IN STD_LOGIC; -- MUX-A Sel
+        M2_SEL : IN STD_LOGIC; -- MUX-B Sel
+        EQZ : IN STD_LOGIC; -- Branch if (not) Equal to Zero
+        -- ALU Operation Code
+        ALU_OPCODE : IN TYPE_OP; -- choose between implicit or exlicit coding, like std_logic_vector(ALU_OPC_SIZE -1 downto 0);
+
+        -- MEM Control Signals
+        EN_STAGE4 : IN STD_LOGIC;
+        RST_STAGE4 : IN STD_LOGIC;
+        JUMP_EN : IN STD_LOGIC_VECTOR (1 DOWNTO 0); -- JUMP Enable Signal for PC input MUX
+        PC_J_EN : IN STD_LOGIC; -- Program Counter Latch Enable in case of jump/branch
+
+        -- WB Control signals
+        EN_STAGE5 : IN STD_LOGIC;
+        RST_STAGE5 : IN STD_LOGIC;
+        M3_SEL : IN STD_LOGIC_VECTOR (1 DOWNTO 0); -- Write Back MUX Sel
+        SEL_WR_RF : IN STD_LOGIC;
+        RF_WE : IN STD_LOGIC; -- Register File Write Enable
+
+        --clock and reset
+        CLK : IN STD_LOGIC;
+        RST : IN STD_LOGIC
+    );
+END datapath;
+
+ARCHITECTURE structural OF datapath IS
+
+    COMPONENT ALU IS
+        GENERIC (Nbit : INTEGER := 32);
+        PORT (
+            FUNC : IN TYPE_OP;
+            DATA1 : IN WORD;
+            DATA2 : IN WORD;
+            OUTALU : OUT WORD);
+    END COMPONENT;
+
+    COMPONENT RCA IS
+        GENERIC (
+            NBIT : INTEGER := 4
+        );
+        PORT (
+            A : IN WORD;
+            B : IN WORD;
+            Ci : IN STD_LOGIC;
+            S : OUT WORD;
+            Co : OUT STD_LOGIC);
+    END COMPONENT;
+
+    COMPONENT register_file IS
+        GENERIC (
+            NBIT : INTEGER := 64;
+            NADD : INTEGER := 5
+        );
+        PORT (
+            CLK : IN STD_LOGIC;
+            RESET : IN STD_LOGIC;
+            ENABLE : IN STD_LOGIC;
+            RD1 : IN STD_LOGIC;
+            RD2 : IN STD_LOGIC;
+            WR : IN STD_LOGIC;
+            ADD_WR : IN STD_LOGIC_VECTOR(NADD - 1 DOWNTO 0);
+            ADD_RD1 : IN STD_LOGIC_VECTOR(NADD - 1 DOWNTO 0);
+            ADD_RD2 : IN STD_LOGIC_VECTOR(NADD - 1 DOWNTO 0);
+            DATAIN : IN WORD;
+            OUT1 : OUT WORD;
+            OUT2 : OUT WORD
+        );
+    END COMPONENT;
+
+    COMPONENT reg IS
+        GENERIC (Nbit : INTEGER := 16); --number of bits
+        PORT (
+            D : IN STD_LOGIC_VECTOR (Nbit - 1 DOWNTO 0); --data input
+            Q : OUT STD_LOGIC_VECTOR (Nbit - 1 DOWNTO 0); --data output
+            EN : IN STD_LOGIC; --enable active high
+            CLK : IN STD_LOGIC; --clock
+            RST : IN STD_LOGIC --asynchronous reset active low
+        );
+    END COMPONENT;
+
+    COMPONENT MUX21_GENERIC IS
+        GENERIC (
+            NBIT : INTEGER := NumBit);
+        PORT (
+            A : IN STD_LOGIC_VECTOR(NBIT - 1 DOWNTO 0);
+            B : IN STD_LOGIC_VECTOR(NBIT - 1 DOWNTO 0);
+            SEL : IN STD_LOGIC;
+            Y : OUT STD_LOGIC_VECTOR(NBIT - 1 DOWNTO 0));
+    END COMPONENT;
+
+    COMPONENT MUX_4to1 IS
+        GENERIC (N : INTEGER := 1); --number of bits
+        PORT (
+            A, B, C, D : IN STD_LOGIC_VECTOR (N - 1 DOWNTO 0); --data inputs
+            SEL : IN STD_LOGIC_VECTOR(1 DOWNTO 0); --selection input
+            Y : OUT STD_LOGIC_VECTOR (N - 1 DOWNTO 0) --data output
+        );
+    END COMPONENT;
+
+    --register input and output signals
+    SIGNAL D_PC, Q_PC, D_NPC, Q_NPC, Q_NPC1, Q_NPC2, Q_NPC3, D_I, Q_I, D_A, Q_A, D_B, Q_B, Q_B2, D_ALU, Q_ALU, Q_ALU1, Q_MEM : WORD;
+
+    --Control Unit signals Register
+    SIGNAL EN_PC, EN_NPC, EN_NPC1, EN_NPC2, EN_NPC3, EN_IR, EN_I, EN_A, EN_B, EN_B2, EN_ALU, EN_ALU1, EN_MEM : STD_LOGIC;
+
+    --Control Unit signals register file
+    SIGNAL EN_RD1, EN_RD2, EN_RF, EN_WR : STD_LOGIC;
+
+    --Control Unit Signal for destination registers
+    SIGNAL EN_WR_REG1, EN_WR_REG2, EN_WR_REG3 : STD_LOGIC;
+
+    --signal for RD 
+    SIGNAL Q1, Q2, Q3 : STD_LOGIC_VECTOR(N_BitReg - 1 DOWNTO 0);
+
+    --signal for RF
+    SIGNAL ADDR_WR_RF : STD_LOGIC_VECTOR(N_BitReg - 1 DOWNTO 0);
+
+    --signal for sign extension and IR
+    SIGNAL Q_IR, Q_IR_16, Q_IR_26, Q_IR_16_B : WORD;
+
+    --MUX in/out signals
+    SIGNAL Y_M1, Y_M2, Y_M3 : WORD;
+
+    --BRANCH condition reg
+    SIGNAL Q_BRANCH, EN_BRANCH : STD_LOGIC;
+
+    --MUX sel signals
+    SIGNAL SEL_M1, SEL_M2, SEL_M4 : STD_LOGIC;
+    SIGNAL SEL_M3 : STD_LOGIC_VECTOR (1 DOWNTO 0);
+
+    --ADD_PC signals
+    SIGNAL Co_NPC : STD_LOGIC;
+
+    --ALU signals
+
+    --Branch taken control signal
+    SIGNAL JumpTaken : STD_LOGIC;
+
+
+BEGIN
+    --IF stage
+    --registers instantiation
+    PC : reg
+    GENERIC MAP(
+        Nbit => Nbit
+    )
+    PORT MAP(
+        D => D_PC,
+        Q => Q_PC,
+        EN => EN_PC,
+        CLK => CLK,
+        RST => RST_STAGE1
+    );
+
+    IRAM_ADDR <= Q_PC;
+
+    --we used 4 different because i need the right value of the NPC at the MEM e WB stage so i insert different register in order to pipline the values
+    NPC : reg
+    GENERIC MAP(
+        Nbit => Nbit
+    )
+    PORT MAP(
+        D => D_NPC,
+        Q => Q_NPC,
+        EN => EN_NPC,
+        CLK => CLK,
+        RST => RST_STAGE1
+    );
+
+    NPC1 : reg
+    GENERIC MAP(
+        Nbit => Nbit
+    )
+    PORT MAP(
+        D => Q_NPC,
+        Q => Q_NPC1,
+        EN => EN_NPC1,
+        CLK => CLK,
+        RST => RST_STAGE2
+    );
+
+    NPC2 : reg
+    GENERIC MAP(
+        Nbit => Nbit
+    )
+    PORT MAP(
+        D => Q_NPC1,
+        Q => Q_NPC2,
+        EN => EN_NPC2,
+        CLK => CLK,
+        RST => RST_STAGE3
+    );
+
+    NPC3 : reg
+    GENERIC MAP(
+        Nbit => Nbit
+    )
+    PORT MAP(
+        D => Q_NPC2,
+        Q => Q_NPC3,
+        EN => EN_NPC3,
+        CLK => CLK,
+        RST => RST_STAGE4
+    );
+    IR : reg
+    GENERIC MAP(
+        Nbit => Nbit
+    )
+    PORT MAP(
+        D => IRAM_IN,
+        Q => Q_IR,
+        EN => EN_IR,
+        CLK => CLK,
+        RST => RST_STAGE1
+    );
+
+    IR_OUT <= Q_IR;
+
+    --ADDER FOR NEXT INSTRUCTION  
+    PC_ADD : RCA
+    GENERIC MAP(
+        NBIT => Nbit
+    )
+    PORT MAP(
+        A => Q_PC,
+        B => WORD_4,
+        Ci => '0',
+        S => D_NPC,
+        Co => Co_NPC
+    );
+
+    --ID Stage
+    --register
+    A : reg
+    GENERIC MAP(
+        Nbit => Nbit
+    )
+    PORT MAP(
+        D => D_A,
+        Q => Q_A,
+        EN => EN_A,
+        CLK => CLK,
+        RST => RST_STAGE2
+    );
+
+    --we used 3 reg  because I need the right value of the RB at the MEM stage so i insert different register in order to pipline the values
+    B : reg
+    GENERIC MAP(
+        Nbit => Nbit
+    )
+    PORT MAP(
+        D => D_B,
+        Q => Q_B,
+        EN => EN_B,
+        CLK => CLK,
+        RST => RST_STAGE2
+    );
+
+    B1 : reg
+    GENERIC MAP(
+        Nbit => Nbit
+    )
+    PORT MAP(
+        D => Q_B,
+        Q => Q_B2,
+        EN => EN_B2,
+        CLK => CLK,
+        RST => RST_STAGE3
+    );
+
+    --sign extension:
+    --in case of instructions that involves a imm the immediate value is on 16 bit
+    Q_IR_16 <= STD_LOGIC_VECTOR(resize(signed(Q_IR(IMM_OFFSET DOWNTO 0)), WORD_SIZE));
+    --in case of jump the immediate value is on 26 bit
+    Q_IR_26 <= STD_LOGIC_VECTOR(resize(signed(Q_IR(IMM_J_OFFSET DOWNTO 0) & "00"), WORD_SIZE));
+    --in case of jump the immediate value is on 16 bit
+    Q_IR_16_B <= STD_LOGIC_VECTOR(resize(signed(Q_IR(IMM_OFFSET DOWNTO 0) & "00"), WORD_SIZE));
+    IMM_MUX : MUX_4to1
+    GENERIC MAP(
+        N => Nbit
+    )
+    PORT MAP(
+        A => Q_IR_16,
+        B => Q_IR_26,
+        C => Q_IR_16_B,
+        D => (OTHERS => '0'),
+        SEL => SEL_M_I,
+        Y => D_I
+    );
+
+    IMM : reg
+    GENERIC MAP(
+        Nbit => Nbit
+    )
+    PORT MAP(
+        D => D_I,
+        Q => Q_I,
+        EN => EN_I,
+        CLK => CLK,
+        RST => RST_STAGE2
+    );
+
+    --we decided to use 4 different registers in order to pipeline the destination register's address so that when the writing operation is performed in the stage of WRITING BACK the correct address is used.
+    ADDR_WR_REG1 : reg
+    GENERIC MAP(
+        Nbit => N_BitReg
+    )
+    PORT MAP(
+        D => Q_IR (RD_OFFSET DOWNTO RD_OFFSET - N_BitReg + 1),
+        Q => Q1,
+        EN => EN_WR_REG1,
+        CLK => CLK,
+        RST => RST_STAGE2
+    );
+
+    ADDR_WR_REG2 : reg
+    GENERIC MAP(
+        Nbit => N_BitReg
+    )
+    PORT MAP(
+        D => Q1,
+        Q => Q2,
+        EN => EN_WR_REG2,
+        CLK => CLK,
+        RST => RST_STAGE3
+    );
+
+    ADDR_WR_REG3 : reg
+    GENERIC MAP(
+        Nbit => N_BitReg
+    )
+    PORT MAP(
+        D => Q2,
+        Q => Q3,
+        EN => EN_WR_REG3,
+        CLK => CLK,
+        RST => RST_STAGE4
+    );
+
+    --MUX to select in which register we have to write if Rd or R31 in case of jump
+    WR_RF_MUX : MUX21_GENERIC
+    GENERIC MAP(
+        NBIT => N_BitReg
+    )
+    PORT MAP(
+        A => Q3,
+        B => LAST_REG,
+        SEL => SEL_WR_RF,
+        Y => ADDR_WR_RF
+    );
+
+    reg_file : register_file
+    GENERIC MAP(
+        NBIT => Nbit,
+        NADD => N_BitReg
+    )
+    PORT MAP(
+        CLK => CLK,
+        RESET => RST_STAGE2,
+        ENABLE => EN_RF,
+        RD1 => EN_RD1,
+        RD2 => EN_RD2,
+        WR => EN_WR,
+        ADD_WR => ADDR_WR_RF,
+        ADD_RD1 => Q_IR (R1_OFFSET DOWNTO R1_OFFSET - N_BitReg + 1),
+        ADD_RD2 => Q_IR (R2_OFFSET DOWNTO R2_OFFSET - N_BitReg + 1),
+        DATAIN => Y_M3,
+        OUT1 => D_A,
+        OUT2 => D_B
+    );
+    --EXE stage
+
+    --register
+
+    ALU_OUT : reg
+    GENERIC MAP(
+        Nbit => Nbit
+    )
+    PORT MAP(
+        D => D_ALU,
+        Q => Q_ALU,
+        EN => EN_ALU,
+        CLK => CLK,
+        RST => RST_STAGE3
+    );
+
+    --Multiplexers instantiation
+    MUX1 : MUX21_GENERIC
+    GENERIC MAP(
+        NBIT => Nbit
+    )
+    PORT MAP(
+        A => Q_NPC,
+        B => Q_A,
+        SEL => SEL_M1,
+        Y => Y_M1
+    );
+
+    MUX2 : MUX21_GENERIC
+    GENERIC MAP(
+        NBIT => Nbit
+    )
+    PORT MAP(
+        A => Q_B,
+        B => Q_I,
+        SEL => SEL_M2,
+        Y => Y_M2
+    );
+
+    --ALU instantiation
+    A_LU : ALU
+    GENERIC MAP(
+        Nbit => Nbit
+    )
+    PORT MAP(
+        FUNC => ALU_OPCODE,
+        DATA1 => Y_M1,
+        DATA2 => Y_M2,
+        OUTALU => D_ALU
+    );
+
+    --branch component
+    --check if zero:
+    Zero : PROCESS (Q_A)
+        VARIABLE isZero : STD_LOGIC;
+    BEGIN
+        isZero := nor_vector (Q_A); --It is equal to one if all bit of the vector are zero
+        --EQZ contains if the branch is taken when is zero (EQZ = 1) or when is not zero (EQZ = 0): 
+        --example isZero = 1 EQZ = 1 -> jump condition is true then isZero exor (not EQZ) = 1,
+        --example isZero = 1 EQZ = 0 -> jump condition is false then isZero exor (not EQZ) = 0
+        JumpTaken <= isZero XOR (NOT EQZ);
+    END PROCESS Zero;
+
+    BRANCH_REG : reg
+    GENERIC MAP(
+        Nbit => 1
+    )
+    PORT MAP(
+        D => JumpTaken,
+        Q => Q_BRANCH,
+        EN => EN_BRANCH,
+        CLK => CLK,
+        RST => RST_STAGE3
+    );
+
+    MUX_BRANCH : MUX_4to1
+    GENERIC MAP(
+        N => 1
+    )
+    PORT MAP(
+        A => '0',
+        B => Q_BRANCH,
+        C => '1',
+        D => '0',
+        SEL => JUMP_EN,
+        Y => SEL_M4
+    );
+
+    --MEM stage
+    --register
+    MEM : reg
+    GENERIC MAP(
+        Nbit => Nbit
+    )
+    PORT MAP(
+        D => DRAM_IN,
+        Q => Q_MEM,
+        EN => EN_MEM,
+        CLK => CLK,
+        RST => RST_STAGE4
+    );
+
+    --we used another reg because we need the right value of the ALU_OUT at the WB stage so we insert different register in order to pipline the values
+    ALU_OUT1 : reg
+    GENERIC MAP(
+        Nbit => Nbit
+    )
+    PORT MAP(
+        D => Q_ALU,
+        Q => Q_ALU1,
+        EN => EN_ALU1,
+        CLK => CLK,
+        RST => RST_STAGE4
+    );
+
+    --mux
+    MUX4 : MUX21_GENERIC
+    GENERIC MAP(
+        NBIT => Nbit
+    )
+    PORT MAP(
+        A => Q_NPC,
+        B => Q_ALU,
+        SEL => SEL_M4,
+        Y => D_PC
+    );
+
+    DRAM_ADDR <= Q_ALU;
+    DRAM_OUT <= Q_B2;
+
+    --WB stage
+
+    MUX3 : MUX_4to1
+    GENERIC MAP(N => Nbit) --number of bits
+    PORT MAP(
+        A => Q_MEM,
+        B => Q_ALU1,
+        C => Q_NPC3,
+        D => (OTHERS => '0'),
+        SEL => SEL_M3,
+        Y => Y_M3
+    );
+
+    --assingment of the corresponding bit in the CW to the correct driven control signals
+    EN_PC <= PC_LATCH_EN OR PC_J_EN;
+    EN_NPC <= NPC_LATCH_EN;
+    EN_IR <= IR_LATCH_EN (2);
+    EN_NPC1 <= EN_STAGE2;
+    EN_RF <= EN_STAGE2 or EN_STAGE5;
+    EN_RD1 <= RD1;
+    EN_RD2 <= RD2;
+    EN_WR <= RF_WE;
+    EN_A <= EN_STAGE2;
+    EN_B <= EN_STAGE2;
+    EN_I <= EN_STAGE2;
+    EN_WR_REG1 <= EN_STAGE2;
+    EN_NPC2 <= EN_STAGE3;
+    SEL_M1 <= M1_SEL;
+    SEL_M2 <= M2_SEL;
+    EN_B2 <= EN_STAGE3;
+    EN_WR_REG2 <= EN_STAGE3;
+    EN_ALU <= EN_STAGE3;
+    EN_NPC3 <= EN_STAGE4;
+    EN_BRANCH <= EN_STAGE4;
+    EN_MEM <= EN_STAGE4;
+    EN_ALU1 <= EN_STAGE4;
+    EN_WR_REG3 <= EN_STAGE4;
+    SEL_M3 <= M3_SEL;
+    --reset signals 
+
+END structural;
