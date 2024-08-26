@@ -1,0 +1,62 @@
+analyze -library WORK -format vhdl {
+../0-packages/0.a-constants.vhd
+../0-packages/0.b-myTypes.vhd
+../0-packages/0.c-alu_type.vhd
+../a.b-DataPath.core/a.b.a-Alu.core/a.b.a.a-p4_adder.core/a.b.a.a.b-SUM_GENERATOR.core/a.b.a.a.b.a-carrySelectBlock.vhd
+../a.b-DataPath.core/a.b.a-Alu.core/a.b.a.a-p4_adder.core/a.b.a.a.a-CARRY_GENERATOR.core/g_block.vhd
+../a.b-DataPath.core/a.b.a-Alu.core/a.b.a.a-p4_adder.core/a.b.a.a.a-CARRY_GENERATOR.core/pg_block.vhd
+../a.b-DataPath.core/a.b.a-Alu.core/a.b.a.a-p4_adder.core/a.b.a.a.a-CARRY_GENERATOR.core/pg_network.vhd
+../a.b-DataPath.core/a.b.a-Alu.core/a.b.a.a-p4_adder.core/a.b.a.a.a-CARRY_GENERATOR.vhd
+../a.b-DataPath.core/a.b.a-Alu.core/a.b.a.a-p4_adder.core/a.b.a.a.b-SUM_GENERATOR.vhd
+../a.b-DataPath.core/a.b.a-Alu.core/a.b.a.a-p4_adder.vhd
+../a.b-DataPath.core/a.b.a-Alu.core/LOGIC_UNIT.vhd
+../a.b-DataPath.core/a.b.a-Alu.core/shifter.vhd
+../a.b-DataPath.core/a.b.a-ALU.vhd
+../a.b-DataPath.core/a.b.b-registerfile.vhd
+../a.b-DataPath.core/a.b.c-rca.vhd
+../a.b-DataPath.core/a.b.c.a-fa.vhd
+../a.b-DataPath.core/a.b.d-Data_Forwarding.vhd
+../a.b-DataPath.core/a.b.e-reg.vhd
+../a.b-DataPath.core/a.b.f-MUX21.vhd
+../a.b-DataPath.core/a.b.g-MUX21_GENERIC.vhd
+../a.b-DataPath.core/a.b.h-MUX41.vhd
+../a.a-CU.vhd
+../a.b-Datapath.vhd
+../a-DLX.vhd
+}
+elaborate dlx -library WORK
+
+set_wire_load_model -name 5K_hvratio_1_4
+
+compile
+
+report_timing > DLX_ReportTiming_noConstraints.rpt
+report_area > DLX_ReportArea_noConstraints.rpt
+report_power > DLX_ReportPower_noConstraints.rpt
+report_power -cell > DLX_ReportPower_Cell_noConstraints.rpt
+report_power -net > DLX_ReportPower_Net_noConstraints.rpt
+
+# Define a new variable Period equal to the value of the max delay obtained
+set Period 2.21
+#Forces a clock of period Period connected to the input port CLK to constrain the synthesis
+set_max_delay $Period -from [all_inputs] -to [all_outputs]
+create_clock -name "CLK" -period $Period {"CLK"}
+
+
+compile -map_effort high
+
+report_timing
+
+#Generating the constrainted timing report
+report_timing > DLX_ReportTiming_Constraints.rpt
+report_power > DLX_ReportPower_Constraints.rpt
+report_area > DLX_ReportArea_Constraints.rpt
+report_power -cell > DLX_ReportPower_Cell_Constraints.rpt
+report_power -net > DLX_ReportPower_Net_Constraints.rpt
+
+# saving files
+
+write -hierarchy -format ddc -output DLX-topt.ddc
+write -hierarchy -format vhdl -output DLX-topt.vhdl
+write -hierarchy -format verilog -output DLX.v
+write_sdc DLX.sdc
